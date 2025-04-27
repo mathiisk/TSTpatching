@@ -28,7 +28,7 @@ def remove_hooks(handles: Dict[str, torch.utils.hooks.RemovableHandle]) -> None:
 
 def run_and_cache(
     model: torch.nn.Module,
-    prompt: torch.Tensor,
+    instance: torch.Tensor,
     hook_layers: List[str],
 ) -> Dict[str, torch.Tensor]:
     """
@@ -38,14 +38,14 @@ def run_and_cache(
     cache = {}
     handles = register_hooks(model, hook_layers,
                              lambda m, i, o: cache.setdefault(m, o.detach().clone()))
-    _ = model(prompt)
+    _ = model(instance)
     remove_hooks(handles)
     return cache
 
 
 def patch_activations(
     model: torch.nn.Module,
-    base_prompt: torch.Tensor,
+    instance: torch.Tensor,
     cache: Dict[str, torch.Tensor],
     hook_layers: List[str]
 ) -> torch.Tensor:
@@ -58,7 +58,7 @@ def patch_activations(
     def patch_fn(module, inp, out):
         return cache[module]
     handles = register_hooks(model, hook_layers, patch_fn)
-    logits = model(base_prompt)
+    logits = model(instance)
     remove_hooks(handles)
     return logits
 
