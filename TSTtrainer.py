@@ -75,14 +75,12 @@ class TimeSeriesTransformer(nn.Module):
         super().__init__()
 
         # convolutional embedding
-        self.conv = nn.Sequential(
-            nn.Conv1d(input_dim, d_model//4, kernel_size=5, padding=2),
-            nn.BatchNorm1d(d_model//4), nn.ReLU(),
-            nn.Conv1d(d_model//4, d_model//2, kernel_size=3, padding=1),
-            nn.BatchNorm1d(d_model//2), nn.ReLU(),
-            nn.Conv1d(d_model//2, d_model, kernel_size=3, padding=1),
-            nn.BatchNorm1d(d_model//2), nn.ReLU(),
-        )
+        self.conv1 = nn.Conv1d(input_dim, d_model//4, kernel_size=5, padding=2)
+        self.bn1   = nn.BatchNorm1d(d_model//4)
+        self.conv2 = nn.Conv1d(d_model//4, d_model//2, kernel_size=3, padding=1)
+        self.bn2   = nn.BatchNorm1d(d_model//2)
+        self.conv3 = nn.Conv1d(d_model//2, d_model, kernel_size=3, padding=1)
+        self.bn3   = nn.BatchNorm1d(d_model)
 
         # positional encoding
         self.pos_enc = nn.Parameter(torch.randn(1, seq_len, d_model))
@@ -94,21 +92,25 @@ class TimeSeriesTransformer(nn.Module):
             dropout=dropout, batch_first=True
         )
 
+        self.transofer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_encoder_layers)
+
         # classification head
         self.pool = nn.AdaptiveMaxPool1d(1)
         self.classifier = nn.Linear(d_model, num_classes)
 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # X: (B, seq_len, channels=1)
-        x = x.transpose(1, 2) # (B, channels, seq_len)
-        x = self.conv(x) # (B, d_model, seq_len)
-        x = x.transpose(1, 2) # (B, seq_len, d_model)
-        x = x + self.pos_enc # add pos encoding
-        x = self.encoder(x) # (B, seq_len, d_model)
-        x. transpose (1, 2) # B, d_model, seq_len)
-        x = self.pool(x).squeeze(-1) # (B, d_model)
-        return self.classifier(x) # (B, num_classes)
+        # x: (B, seq_len, channels)
+        x = x.transpose(1, 2)  # (B, channels, seq_len)
+        x = torch.relu(self.bn1(self.conv1(x)))  # conv1 -> bn1 -> relu
+        x = torch.relu(self.bn2(self.conv2(x)))  # conv2 -> bn2 -> relu
+        x = torch.relu(self.bn3(self.conv3(x)))  # conv3 -> bn3 -> relu
+        x = x.transpose(1, 2)  # (B, seq_len, d_model)
+        x = x + self.pos_enc   # add positional encoding
+        x = self.transofer_encoder(x)    # transformer encoder
+        x = x.transpose(1, 2)  # (B, d_model, seq_len)
+        x = self.pool(x).squeeze(-1)  # global pooling -> (B, d_model)
+        return self.classifier(x)     # (B, num_classes)
 
 
 class Trainer:
@@ -173,10 +175,13 @@ def main():
     # load data
     train_loader, test_loader = load_dataset(dataset_name, batch_size)
 
+    train_labels = train_loader.dataset.tensors[1]
+    test_labels  = test_loader.dataset.tensors[1]
+    num_classes  = int(torch.cat([train_labels, test_labels]).max().item()) + 1
+
     # model instantiation
     sample_seq, _ = next(iter(train_loader))
     seq_len, channels = sample_seq.shape[1], sample_seq.shape[2]
-    num_classes = len({yb.item() for _, yb in train_loader.dataset})
     model = TimeSeriesTransformer(
         input_dim=channels,
         num_classes=num_classes,
