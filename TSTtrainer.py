@@ -92,7 +92,7 @@ class TimeSeriesTransformer(nn.Module):
             dropout=dropout, batch_first=True
         )
 
-        self.transofer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_encoder_layers)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_encoder_layers)
 
         # classification head
         self.pool = nn.AdaptiveMaxPool1d(1)
@@ -107,7 +107,7 @@ class TimeSeriesTransformer(nn.Module):
         x = torch.relu(self.bn3(self.conv3(x)))  # conv3 -> bn3 -> relu
         x = x.transpose(1, 2)  # (B, seq_len, d_model)
         x = x + self.pos_enc   # add positional encoding
-        x = self.transofer_encoder(x)    # transformer encoder
+        x = self.transformer_encoder(x)    # transformer encoder
         x = x.transpose(1, 2)  # (B, d_model, seq_len)
         x = self.pool(x).squeeze(-1)  # global pooling -> (B, d_model)
         return self.classifier(x)     # (B, num_classes)
@@ -175,6 +175,7 @@ def main():
     # load data
     train_loader, test_loader = load_dataset(dataset_name, batch_size)
 
+    # determine num_classes
     train_labels = train_loader.dataset.tensors[1]
     test_labels  = test_loader.dataset.tensors[1]
     num_classes  = int(torch.cat([train_labels, test_labels]).max().item()) + 1
