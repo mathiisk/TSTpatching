@@ -2,10 +2,12 @@ from typing import List, Tuple
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import itertools
 import torch
 import torch.nn as nn
+import networkx as nx
 
-# ------ Hook Utilities ------
+# HOOK FUNCTIONS
 def _register_hooks(model: nn.Module, substrings: List[str], hook_fn) -> dict:
     handles = {}
     for name, module in model.named_modules():
@@ -16,7 +18,8 @@ def _register_hooks(model: nn.Module, substrings: List[str], hook_fn) -> dict:
 def _remove_hooks(handles: dict) -> None:
     for handle in handles.values(): handle.remove()
 
-# ------ Activation Caching & Patching ------
+
+# CACHING ATTENTION FUNCTIONS
 def run_and_cache(model: nn.Module, x: torch.Tensor, targets: List[str]) -> dict:
     cache = {}
     def hook(m, inp, out):
@@ -77,7 +80,7 @@ def patch_activations(model: nn.Module, x: torch.Tensor, cache: dict, targets: L
     _remove_hooks(handles)
     return out
 
-# ------ Probability Utilities ------
+# PROBABILITY FUNCTION
 def get_probs(model: nn.Module, instance: torch.Tensor) -> np.ndarray:
     device = next(model.parameters()).device
     with torch.no_grad():
@@ -85,7 +88,7 @@ def get_probs(model: nn.Module, instance: torch.Tensor) -> np.ndarray:
         probs = torch.softmax(logits, dim=1)[0].cpu().numpy()
     return probs
 
-# ------ Transformer-Specific Helpers ------
+# TRANSFORMER HELPER
 def get_encoder_inputs(model: nn.Module, x: torch.Tensor) -> torch.Tensor:
     z = x.transpose(1,2)
     for conv, bn in ((model.conv1, model.bn1), (model.conv2, model.bn2), (model.conv3, model.bn3)):
@@ -93,7 +96,7 @@ def get_encoder_inputs(model: nn.Module, x: torch.Tensor) -> torch.Tensor:
     z = z.transpose(1,2)
     return z + model.pos_enc
 
-# ------ Attention Head Patching ------
+# PATCH SINGLE ATTENTION HEAD
 def patch_attention_head(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor,
                          layer_idx: int, head_idx: int) -> torch.Tensor:
     device = next(model.parameters()).device
@@ -120,7 +123,118 @@ def patch_attention_head(model: nn.Module, clean: torch.Tensor, corrupt: torch.T
     handle2.remove()
     return logits
 
-# ------ Sweeping over Heads ------
+
+def patch_mlp_activation(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, layer_idx: int) -> torch.Tensor:
+    device = next(model.parameters()).device
+    clean_b = clean.unsqueeze(0).to(device)
+    corrupt_b = corrupt.unsqueeze(0).to(device)
+    layer_mod = model.transformer_encoder.layers[layer_idx]
+    mlp_layer = layer_mod.linear2  # Patch after second linear layer
+
+    cache = {}
+
+    def cache_hook(m, inp, out):
+        cache[m] = out.detach().clone()
+
+    handle_cache = mlp_layer.register_forward_hook(cache_hook)
+    _ = model(clean_b)
+    handle_cache.remove()
+
+    def patch_hook(m, inp, out):
+        return cache[m]
+
+    handle_patch = mlp_layer.register_forward_hook(patch_hook)
+    logits = model(corrupt_b)
+    handle_patch.remove()
+
+    return logits
+
+def patch_attention_head_at_position(
+    model: nn.Module,
+    clean: torch.Tensor,
+    corrupt: torch.Tensor,
+    layer_idx: int,
+    head_idx: int,
+    pos_idx: int
+) -> torch.Tensor:
+    """
+    Patch a specific (layer, head, position) in the attention output.
+    """
+    device = next(model.parameters()).device
+    clean_b = clean.unsqueeze(0).to(device)
+    corrupt_b = corrupt.unsqueeze(0).to(device)
+
+    layer_mod = model.transformer_encoder.layers[layer_idx]
+    attn_mod = layer_mod.self_attn
+    cache = {}
+
+    def cache_hook(m, inp, out):
+        cache[m] = out[0].detach().clone()
+
+    handle_cache = attn_mod.register_forward_hook(cache_hook)
+    _ = model(clean_b)
+    handle_cache.remove()
+
+    clean_val = cache[attn_mod]  # (1, seq_len, d_model)
+    B, S, E = clean_val.shape
+    H = attn_mod.num_heads
+    d = E // H
+
+    clean_heads = clean_val.view(B, S, H, d)
+
+    def patch_hook(m, inp, out):
+        out_val = out[0]
+        heads = out_val.view(B, S, H, d)
+        heads[:, pos_idx, head_idx, :] = clean_heads[:, pos_idx, head_idx, :]
+        return heads.reshape(B, S, E)
+
+    handle_patch = attn_mod.register_forward_hook(patch_hook)
+    logits = model(corrupt_b)
+    handle_patch.remove()
+
+    return logits
+
+
+def patch_mlp_at_position(
+    model: nn.Module,
+    clean: torch.Tensor,
+    corrupt: torch.Tensor,
+    layer_idx: int,
+    pos_idx: int
+) -> torch.Tensor:
+    """
+    Patch a specific (layer, position) in the MLP output.
+    """
+    device = next(model.parameters()).device
+    clean_b = clean.unsqueeze(0).to(device)
+    corrupt_b = corrupt.unsqueeze(0).to(device)
+
+    layer_mod = model.transformer_encoder.layers[layer_idx]
+    mlp_layer = layer_mod.linear2
+    cache = {}
+
+    def cache_hook(m, inp, out):
+        cache[m] = out.detach().clone()
+
+    handle_cache = mlp_layer.register_forward_hook(cache_hook)
+    _ = model(clean_b)
+    handle_cache.remove()
+
+    clean_val = cache[mlp_layer]  # (batch, seq_len, d_model)
+
+    def patch_hook(m, inp, out):
+        patched = out.clone()
+        patched[:, pos_idx, :] = clean_val[:, pos_idx, :]
+        return patched
+
+    handle_patch = mlp_layer.register_forward_hook(patch_hook)
+    logits = model(corrupt_b)
+    handle_patch.remove()
+
+    return logits
+
+
+# SWEEP OVER HEADS
 def sweep_heads(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor,
                             num_classes: int) -> np.ndarray:
     model.eval()
@@ -137,7 +251,123 @@ def sweep_heads(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor,
             patch_probs[l, h] = probs
     return patch_probs
 
-# ------ Plotting ------
+
+def sweep_mlp_layers(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, num_classes: int) -> np.ndarray:
+    model.eval()
+    device = next(model.parameters()).device
+    clean_b = clean.unsqueeze(0).to(device)
+    corrupt_b = corrupt.unsqueeze(0).to(device)
+    L = len(model.transformer_encoder.layers)
+    patch_probs = np.zeros((L, num_classes))
+    for l in range(L):
+        logits = patch_mlp_activation(model, clean, corrupt, l)
+        probs = torch.softmax(logits, dim=1)[0].detach().cpu().numpy()
+        patch_probs[l] = probs
+    return patch_probs
+
+
+def sweep_attention_head_positions(
+    model: nn.Module,
+    clean: torch.Tensor,
+    corrupt: torch.Tensor,
+    num_layers: int,
+    num_heads: int,
+    seq_len: int,
+    num_classes: int
+) -> np.ndarray:
+    """
+    Sweep over all (layer, head, position) for attention head patching.
+    Returns patch_probs: (num_layers, num_heads, seq_len, num_classes)
+    """
+    model.eval()
+    device = next(model.parameters()).device
+    clean_b = clean.unsqueeze(0).to(device)
+    corrupt_b = corrupt.unsqueeze(0).to(device)
+
+    patch_probs = np.zeros((num_layers, num_heads, seq_len, num_classes))
+
+    for l in range(num_layers):
+        for h in range(num_heads):
+            for pos in range(seq_len):
+                logits = patch_attention_head_at_position(model, clean, corrupt, l, h, pos)
+                probs = torch.softmax(logits, dim=1)[0].detach().cpu().numpy()
+                patch_probs[l, h, pos] = probs
+
+    return patch_probs  # (layers, heads, positions, classes)
+
+
+def sweep_mlp_positions(
+    model: nn.Module,
+    clean: torch.Tensor,
+    corrupt: torch.Tensor,
+    num_layers: int,
+    seq_len: int,
+    num_classes: int
+) -> np.ndarray:
+    """
+    Sweep over all (layer, position) pairs for MLP patching.
+    Returns patch_probs: (num_layers, seq_len, num_classes)
+    """
+    model.eval()
+    device = next(model.parameters()).device
+    clean_b = clean.unsqueeze(0).to(device)
+    corrupt_b = corrupt.unsqueeze(0).to(device)
+
+    patch_probs = np.zeros((num_layers, seq_len, num_classes))
+
+    for l in range(num_layers):
+        for pos in range(seq_len):
+            logits = patch_mlp_at_position(model, clean, corrupt, l, pos)
+            probs = torch.softmax(logits, dim=1)[0].detach().cpu().numpy()
+            patch_probs[l, pos] = probs
+
+    return patch_probs  # (layers, positions, classes)
+
+
+def find_critical_patches(
+    patch_probs: np.ndarray,
+    baseline_probs: np.ndarray,
+    true_label: int,
+    threshold: float = 0.05
+) -> List[Tuple[int, int, int, float]]:
+    """
+    Finds (layer, head, position, delta) tuples where ΔP(true) > threshold.
+    Returns a list of important patches.
+    """
+    delta = patch_probs[:, :, :, true_label] - baseline_probs[true_label]
+    critical = []
+
+    L, H, P = delta.shape
+
+    for l in range(L):
+        for h in range(H):
+            for p in range(P):
+                if delta[l, h, p] > threshold:
+                    critical.append((l, h, p, delta[l, h, p]))
+
+    return critical
+
+
+
+def build_causal_graph(critical_patches: List[Tuple[int, int, int, float]]) -> nx.DiGraph:
+    """
+    Builds a directed graph from critical patches.
+    Nodes: input timesteps and (layer, head)
+    Edges: input timestep → head with weight=delta
+    """
+    G = nx.DiGraph()
+
+    for layer, head, pos, delta in critical_patches:
+        timestep_node = f"Time {pos}"
+        head_node = f"L{layer}H{head}"
+
+        G.add_edge(timestep_node, head_node, weight=delta)
+
+    return G
+
+
+
+# PLOTTING FUNCTIONS
 def plot_influence(patch_probs: np.ndarray, baseline_probs: np.ndarray, true_label: int) -> None:
     delta = patch_probs[:, :, true_label] - baseline_probs[true_label]
     L, H = delta.shape
@@ -149,6 +379,18 @@ def plot_influence(patch_probs: np.ndarray, baseline_probs: np.ndarray, true_lab
     ax.set_xlabel("Head"); ax.set_ylabel("Layer")
     ax.set_title("ΔP(true) by Layer & Head")
     plt.tight_layout(); plt.show()
+
+
+def plot_mlp_influence(patch_probs: np.ndarray, baseline_probs: np.ndarray, true_label: int) -> None:
+    delta = patch_probs[:, true_label] - baseline_probs[true_label]
+    L = delta.shape[0]
+    fig, ax = plt.subplots(figsize=(L * 0.6, 4))
+    sns.barplot(x=np.arange(L), y=delta, hue=np.arange(L), palette="coolwarm", dodge=False, ax=ax, legend=False)
+    ax.set_xlabel("Layer")
+    ax.set_ylabel("ΔP(True Label)")
+    ax.set_title("ΔP(True) by MLP Layer")
+    plt.tight_layout()
+    plt.show()
 
 
 def plot_mini_deltas(patch_probs: np.ndarray, baseline_probs: np.ndarray, class_labels: List[str]=None) -> None:
@@ -208,4 +450,155 @@ def plot_timeseries_with_attention_overlay(instances: List[torch.Tensor], salien
     plt.suptitle(title, fontsize=16, y=1.02)
     plt.tight_layout()
     plt.show()
+
+
+def plot_head_position_patch_heatmap(
+    patch_probs: np.ndarray,
+    baseline_probs: np.ndarray,
+    true_label: int,
+    layer_idx: int,
+    head_idx: int,
+    title: str = "Attention Head Patch Effect by Position"
+) -> None:
+    """
+    Plots heatmap for a specific head's ΔP(true_label) across positions.
+    patch_probs: (layers, heads, positions, classes)
+    """
+    delta = patch_probs[layer_idx, head_idx, :, true_label] - baseline_probs[true_label]
+    seq_len = delta.shape[0]
+
+    fig, ax = plt.subplots(figsize=(12, 2))
+    sns.heatmap(delta[np.newaxis, :], cmap="coolwarm", center=0,
+                xticklabels=20, yticklabels=[f"L{layer_idx} H{head_idx}"],
+                cbar_kws={'label': 'ΔP(True Label)'}, ax=ax)
+    ax.set_xlabel("Position (Timestep)")
+    ax.set_ylabel("")
+    ax.set_title(title)
+    plt.tight_layout()
+    plt.show()
+
+
+
+def plot_mlp_position_patch_heatmap(
+        patch_probs: np.ndarray,
+        baseline_probs: np.ndarray,
+        true_label: int,
+        title: str = "Patch Effect by Layer and Position"
+) -> None:
+    """
+    Plots a heatmap of ΔP(true_label) after patching.
+    patch_probs: (layers, positions, num_classes)
+    baseline_probs: (num_classes,)
+    """
+    delta = patch_probs[:, :, true_label] - baseline_probs[true_label]
+    L, P = delta.shape
+
+    fig, ax = plt.subplots(figsize=(12, 0.5 * L))
+    sns.heatmap(delta, cmap="coolwarm", center=0,
+                xticklabels=20, yticklabels=[f"Layer {i}" for i in range(L)],
+                cbar_kws={'label': 'ΔP(True Label)'}, ax=ax)
+    ax.set_xlabel("Position (Timestep)")
+    ax.set_ylabel("Layer")
+    ax.set_title(title)
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_causal_graph(G: nx.DiGraph, title="Critical Circuits Graph") -> None:
+    pos = nx.spring_layout(G, k=0.8, seed=42)
+
+    weights = [G[u][v]['weight'] for u,v in G.edges()]
+    edge_colors = ["red" if w > 0 else "blue" for w in weights]
+
+    # Color nodes by type
+    node_colors = []
+    for node in G.nodes():
+        if node.startswith("Time"):
+            node_colors.append("lightgreen")
+        else:
+            node_colors.append("lightblue")
+
+    # Size nodes by degree
+    node_sizes = []
+    for node in G.nodes():
+        deg = G.degree(node)
+        node_sizes.append(300 + deg * 100)
+
+    plt.figure(figsize=(14, 10))
+    nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=node_sizes)
+    nx.draw_networkx_edges(G, pos, edge_color=edge_colors, width=[abs(w)*10 for w in weights], arrows=True)
+    nx.draw_networkx_labels(G, pos, font_size=10)
+    plt.title(title)
+    plt.axis('off')
+    plt.show()
+
+
+def patch_multiple_attention_heads_positions(
+    model: nn.Module,
+    clean: torch.Tensor,
+    corrupt: torch.Tensor,
+    critical_edges: List[Tuple[str, str, dict]]
+) -> torch.Tensor:
+    device = next(model.parameters()).device
+    clean_b = clean.unsqueeze(0).to(device)
+    corrupt_b = corrupt.unsqueeze(0).to(device)
+
+    cache = {}
+
+    # Step 1: Capture clean activations
+    hook_layers = set()
+    for u, v, _ in critical_edges:
+        layer = int(v[1])
+        hook_layers.add(layer)
+
+    hook_layers = list(hook_layers)
+
+    def cache_hook(m, inp, out):
+        if m not in cache:
+            cache[m] = out[0].detach().clone()
+
+    handles_cache = []
+    for layer_idx in hook_layers:
+        attn_mod = model.transformer_encoder.layers[layer_idx].self_attn
+        handles_cache.append(attn_mod.register_forward_hook(cache_hook))
+
+    _ = model(clean_b)
+    for h in handles_cache: h.remove()
+
+    # Step 2: Patch during corrupted forward
+    def patch_hook_factory(layer_idx):
+        def patch_fn(m, inp, out):
+            out_val = out[0]
+            B, S, E = out_val.shape
+            H = m.num_heads
+            d = E // H
+            heads = out_val.view(B, S, H, d)
+
+            clean_val = cache[m]
+            clean_heads = clean_val.view(B, S, H, d)
+
+            for u, v, _ in critical_edges:
+                l = int(v[1])
+                h = int(v[3])
+                pos = int(u.split()[1])
+
+                if l == layer_idx:
+                    heads[:, pos, h, :] = clean_heads[:, pos, h, :]
+
+            return heads.reshape(B, S, E)
+
+        return patch_fn
+
+    handles_patch = []
+    for layer_idx in hook_layers:
+        attn_mod = model.transformer_encoder.layers[layer_idx].self_attn
+        handles_patch.append(attn_mod.register_forward_hook(patch_hook_factory(layer_idx)))
+
+    logits = model(corrupt_b)
+
+    for h in handles_patch: h.remove()
+
+    return logits
+
+
 
