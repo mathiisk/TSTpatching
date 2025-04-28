@@ -11,11 +11,7 @@ def load_dataset(name: str, batch_size: int = 4):
     """
     Loads and preprocesses the dataset.
     Returns train and test DataLoaders.
-    :param name: Name of the dataset
-    :param batch_size:
-    :return:
     """
-
     X_train, y_train = load_classification(name, split="train")
     X_test, y_test = load_classification(name, split="test")
 
@@ -36,7 +32,6 @@ def _preprocess_series(X: np.ndarray) -> torch.Tensor:
     """
     Swap to shape (N, seq_len, channels) and convert to float tensor
     """
-
     arr = X.astype(np.float32)
     arr = np.swapaxes(arr, 1, 2)
     return torch.tensor(arr)
@@ -46,7 +41,6 @@ def _remap_labels(y_train: np.ndarray, y_test: np.ndarray) -> tuple:
     """
     Convert to zero-based int64 tensors
     """
-
     t_train = torch.tensor(y_train.astype(np.int64))
     t_test = torch.tensor(y_test.astype(np.int64))
     min_val = int(t_train.min())
@@ -60,7 +54,6 @@ class TimeSeriesTransformer(nn.Module):
     """
     A Transformer-based classifier for multivariate time series
     """
-
     def __init__(
         self,
         input_dim: int,
@@ -91,8 +84,9 @@ class TimeSeriesTransformer(nn.Module):
             dim_feedforward=dim_feedforward,
             dropout=dropout, batch_first=True
         )
-
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_encoder_layers)
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer, num_layers=num_encoder_layers
+        )
 
         # classification head
         self.pool = nn.AdaptiveMaxPool1d(1)
@@ -167,7 +161,7 @@ class Trainer:
 
 def main():
     # hyperparameters
-    dataset_name = "JapaneseVowels"
+    dataset_name = "JapaneseVowels" # simply specify name from https://www.timeseriesclassification.com/dataset.php
     batch_size = 4
     num_epochs = 100
     model_path = f"TST_{dataset_name.lower()}.pth"
