@@ -157,9 +157,6 @@ def patch_attention_head_at_position(
     head_idx: int,
     pos_idx: int
 ) -> torch.Tensor:
-    """
-    Patch a specific (layer, head, position) in the attention output.
-    """
     device = next(model.parameters()).device
     clean_b = clean.unsqueeze(0).to(device)
     corrupt_b = corrupt.unsqueeze(0).to(device)
@@ -202,9 +199,6 @@ def patch_mlp_at_position(
     layer_idx: int,
     pos_idx: int
 ) -> torch.Tensor:
-    """
-    Patch a specific (layer, position) in the MLP output.
-    """
     device = next(model.parameters()).device
     clean_b = clean.unsqueeze(0).to(device)
     corrupt_b = corrupt.unsqueeze(0).to(device)
@@ -275,10 +269,6 @@ def sweep_attention_head_positions(
     seq_len: int,
     num_classes: int
 ) -> np.ndarray:
-    """
-    Sweep over all (layer, head, position) for attention head patching.
-    Returns patch_probs: (num_layers, num_heads, seq_len, num_classes)
-    """
     model.eval()
     device = next(model.parameters()).device
     clean_b = clean.unsqueeze(0).to(device)
@@ -304,10 +294,6 @@ def sweep_mlp_positions(
     seq_len: int,
     num_classes: int
 ) -> np.ndarray:
-    """
-    Sweep over all (layer, position) pairs for MLP patching.
-    Returns patch_probs: (num_layers, seq_len, num_classes)
-    """
     model.eval()
     device = next(model.parameters()).device
     clean_b = clean.unsqueeze(0).to(device)
@@ -330,10 +316,6 @@ def find_critical_patches(
     true_label: int,
     threshold: float = 0.05
 ) -> List[Tuple[int, int, int, float]]:
-    """
-    Finds (layer, head, position, delta) tuples where ΔP(true) > threshold.
-    Returns a list of important patches.
-    """
     delta = patch_probs[:, :, :, true_label] - baseline_probs[true_label]
     critical = []
 
@@ -350,11 +332,6 @@ def find_critical_patches(
 
 
 def build_causal_graph(critical_patches: List[Tuple[int, int, int, float]]) -> nx.DiGraph:
-    """
-    Builds a directed graph from critical patches.
-    Nodes: input timesteps and (layer, head)
-    Edges: input timestep → head with weight=delta
-    """
     G = nx.DiGraph()
 
     for layer, head, pos, delta in critical_patches:
@@ -364,7 +341,6 @@ def build_causal_graph(critical_patches: List[Tuple[int, int, int, float]]) -> n
         G.add_edge(timestep_node, head_node, weight=delta)
 
     return G
-
 
 
 # PLOTTING FUNCTIONS
@@ -485,11 +461,6 @@ def plot_mlp_position_patch_heatmap(
         true_label: int,
         title: str = "Patch Effect by Layer and Position"
 ) -> None:
-    """
-    Plots a heatmap of ΔP(true_label) after patching.
-    patch_probs: (layers, positions, num_classes)
-    baseline_probs: (num_classes,)
-    """
     delta = patch_probs[:, :, true_label] - baseline_probs[true_label]
     L, P = delta.shape
 
@@ -599,6 +570,3 @@ def patch_multiple_attention_heads_positions(
     for h in handles_patch: h.remove()
 
     return logits
-
-
-
