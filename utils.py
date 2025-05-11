@@ -124,6 +124,46 @@ def patch_attention_head(model: nn.Module, clean: torch.Tensor, corrupt: torch.T
     return logits
 
 
+from contextlib import contextmanager
+
+@contextmanager
+def with_head_patch(model, clean, layer_idx, head_idx):
+    device = next(model.parameters()).device
+    clean_b = clean.unsqueeze(0).to(device)
+
+    # Cache clean output
+    layer_mod = model.transformer_encoder.layers[layer_idx]
+    attn_mod = layer_mod.self_attn
+    cache = {}
+
+    def save_hook(m, i, o):
+        cache[m] = o[0].detach().clone()
+
+    handle1 = attn_mod.register_forward_hook(save_hook)
+    _ = model(clean_b)
+    handle1.remove()
+
+    clean_val = cache[attn_mod]
+    B, S, E = clean_val.shape
+    H = attn_mod.num_heads
+    d = E // H
+    clean_heads = clean_val.view(B, S, H, d)[:, :, head_idx, :]
+
+    # Patch hook
+    def patch_hook(m, inp, out):
+        out_val = out[0]
+        heads = out_val.view(B, S, H, d)
+        heads[:, :, head_idx, :] = clean_heads
+        return heads.reshape(B, S, E)
+
+    handle2 = attn_mod.register_forward_hook(patch_hook)
+    try:
+        yield
+    finally:
+        handle2.remove()
+
+
+
 def patch_mlp_activation(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, layer_idx: int) -> torch.Tensor:
     device = next(model.parameters()).device
     clean_b = clean.unsqueeze(0).to(device)
@@ -504,6 +544,33 @@ def plot_causal_graph(G: nx.DiGraph, title="Critical Circuits Graph") -> None:
     plt.show()
 
 
+
+def plot_structured_graph(G):
+    pos = {}
+    # Separate node groups
+    time_nodes = [n for n in G.nodes if 'Time' in n]
+    head_nodes = [n for n in G.nodes if 'H' in n]
+
+    # Assign positions: time nodes in one row, heads in another
+    for i, node in enumerate(sorted(time_nodes)):
+        pos[node] = (i, 1)
+    for i, node in enumerate(sorted(head_nodes)):
+        pos[node] = (i, 0)
+
+    # Size and color nodes by degree or role
+    node_sizes = [500 + 1000 * G.degree(n) for n in G.nodes]
+    node_colors = ['seagreen' if 'Time' in n else 'steelblue' for n in G.nodes]
+
+    # Draw with directional arrows
+    plt.figure(figsize=(14, 6))
+    nx.draw_networkx(G, pos, with_labels=True, node_color=node_colors,
+                     node_size=node_sizes, edge_color='maroon',
+                     arrows=True, font_size=8, width=1.5)
+    plt.title("Structured Attribution Graph (Time → Head)", fontsize=14)
+    plt.axis('off')
+    plt.tight_layout()
+    plt.show()
+
 def patch_multiple_attention_heads_positions(
     model: nn.Module,
     clean: torch.Tensor,
@@ -570,3 +637,109 @@ def patch_multiple_attention_heads_positions(
     for h in handles_patch: h.remove()
 
     return logits
+
+
+def capture_all_heads(model, x, num_layers, num_heads):
+    cache = {}
+
+    def make_hook(layer_idx, head_idx):
+        def hook(m, inp, out):
+            val = out[0] if isinstance(out, tuple) else out
+            B, S, E = val.shape
+            d = E // num_heads
+            heads = val.view(B, S, num_heads, d)
+            cache[(layer_idx, head_idx)] = heads[:, :, head_idx, :].detach().clone()
+        return hook
+
+    handles = []
+    for l in range(num_layers):
+        mod = model.transformer_encoder.layers[l].self_attn
+        for h in range(num_heads):
+            handles.append(mod.register_forward_hook(make_hook(l, h)))
+
+    _ = model(x.unsqueeze(0).to(next(model.parameters()).device))
+
+    for h in handles:
+        h.remove()
+
+    return cache
+
+
+
+def sweep_head_to_head_influence(model, clean, corrupt) -> np.ndarray:
+    model.eval()
+    device = next(model.parameters()).device
+    clean_b = clean.unsqueeze(0).to(device)
+    corrupt_b = corrupt.unsqueeze(0).to(device)
+
+    L = len(model.transformer_encoder.layers)
+    H = model.transformer_encoder.layers[0].self_attn.num_heads
+
+    # Step 1: get baseline outputs
+    corrupt_cache = capture_all_heads(model, corrupt, L, H)
+
+    influence = np.zeros((L, H, L, H))  # [source_head, target_head]
+
+    for l_src in range(L):
+        for h_src in range(H):
+            with with_head_patch(model, clean, l_src, h_src):
+                patched_cache = capture_all_heads(model, corrupt, L, H)
+
+                for l_tgt in range(L):
+                    for h_tgt in range(H):
+                        if (l_tgt, h_tgt) in corrupt_cache:
+                            diff = torch.nn.functional.mse_loss(
+                                patched_cache[(l_tgt, h_tgt)],
+                                corrupt_cache[(l_tgt, h_tgt)],
+                                reduction='mean'
+                            ).item()
+                            influence[l_src, h_src, l_tgt, h_tgt] = diff
+
+    return influence
+
+
+
+def build_head_causal_graph(influence_matrix: np.ndarray, threshold: float = 0.1) -> nx.DiGraph:
+    G = nx.DiGraph()
+    L, H, _, _ = influence_matrix.shape
+    for l1 in range(L):
+        for h1 in range(H):
+            G.add_node(f"L{l1}H{h1}")
+            for l2 in range(L):
+                for h2 in range(H):
+                    score = influence_matrix[l1, h1, l2, h2]
+                    if l1 != l2 and score > threshold:
+                        G.add_edge(f"L{l1}H{h1}", f"L{l2}H{h2}", weight=score)
+    return G
+
+
+def sweep_head_to_output_deltas(model, clean, corrupt, true_label, num_classes):
+    """
+    Returns a [L, H] matrix where each entry is the ΔP(true_label)
+    caused by patching that attention head.
+    """
+    model.eval()
+    device = next(model.parameters()).device
+    clean_b = clean.unsqueeze(0).to(device)
+    corrupt_b = corrupt.unsqueeze(0).to(device)
+
+    # Get baseline probabilities from corrupted input
+    with torch.no_grad():
+        baseline_logits = model(corrupt_b)
+        baseline_probs = torch.softmax(baseline_logits, dim=1)[0].cpu().numpy()
+        baseline_p = baseline_probs[true_label]
+
+    # Init matrix
+    L = len(model.transformer_encoder.layers)
+    H = model.transformer_encoder.layers[0].self_attn.num_heads
+    delta_p = np.zeros((L, H))
+
+    for l in range(L):
+        for h in range(H):
+            patched_logits = patch_attention_head(model, clean, corrupt, l, h)
+            patched_probs = torch.softmax(patched_logits, dim=1)[0].detach().cpu().numpy()
+            delta = patched_probs[true_label] - baseline_p
+            delta_p[l, h] = delta
+
+    return delta_p
+
