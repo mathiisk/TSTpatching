@@ -31,12 +31,7 @@ def run_and_cache(model: nn.Module, x: torch.Tensor, targets: List[str]) -> dict
     return cache
 
 
-def get_attention_saliency(
-    model: nn.Module,
-    instance: torch.Tensor,
-    layer_idx: int,
-    head_idx: int
-) -> torch.Tensor:
+def get_attention_saliency(model: nn.Module, instance: torch.Tensor, layer_idx: int, head_idx: int) -> torch.Tensor:
     model.eval()
     device = next(model.parameters()).device
     instance = instance.unsqueeze(0).to(device)
@@ -125,13 +120,11 @@ def patch_attention_head(model: nn.Module, clean: torch.Tensor, corrupt: torch.T
 
 
 from contextlib import contextmanager
-
 @contextmanager
 def with_head_patch(model, clean, layer_idx, head_idx):
     device = next(model.parameters()).device
     clean_b = clean.unsqueeze(0).to(device)
 
-    # Cache clean output
     layer_mod = model.transformer_encoder.layers[layer_idx]
     attn_mod = layer_mod.self_attn
     cache = {}
@@ -149,7 +142,6 @@ def with_head_patch(model, clean, layer_idx, head_idx):
     d = E // H
     clean_heads = clean_val.view(B, S, H, d)[:, :, head_idx, :]
 
-    # Patch hook
     def patch_hook(m, inp, out):
         out_val = out[0]
         heads = out_val.view(B, S, H, d)
@@ -169,7 +161,7 @@ def patch_mlp_activation(model: nn.Module, clean: torch.Tensor, corrupt: torch.T
     clean_b = clean.unsqueeze(0).to(device)
     corrupt_b = corrupt.unsqueeze(0).to(device)
     layer_mod = model.transformer_encoder.layers[layer_idx]
-    mlp_layer = layer_mod.linear2  # Patch after second linear layer
+    mlp_layer = layer_mod.linear2
 
     cache = {}
 
@@ -189,14 +181,7 @@ def patch_mlp_activation(model: nn.Module, clean: torch.Tensor, corrupt: torch.T
 
     return logits
 
-def patch_attention_head_at_position(
-    model: nn.Module,
-    clean: torch.Tensor,
-    corrupt: torch.Tensor,
-    layer_idx: int,
-    head_idx: int,
-    pos_idx: int
-) -> torch.Tensor:
+def patch_attention_head_at_position(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, layer_idx: int, head_idx: int, pos_idx: int) -> torch.Tensor:
     device = next(model.parameters()).device
     clean_b = clean.unsqueeze(0).to(device)
     corrupt_b = corrupt.unsqueeze(0).to(device)
@@ -232,13 +217,7 @@ def patch_attention_head_at_position(
     return logits
 
 
-def patch_mlp_at_position(
-    model: nn.Module,
-    clean: torch.Tensor,
-    corrupt: torch.Tensor,
-    layer_idx: int,
-    pos_idx: int
-) -> torch.Tensor:
+def patch_mlp_at_position(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, layer_idx: int, pos_idx: int) -> torch.Tensor:
     device = next(model.parameters()).device
     clean_b = clean.unsqueeze(0).to(device)
     corrupt_b = corrupt.unsqueeze(0).to(device)
@@ -269,8 +248,7 @@ def patch_mlp_at_position(
 
 
 # SWEEP OVER HEADS
-def sweep_heads(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor,
-                            num_classes: int) -> np.ndarray:
+def sweep_heads(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, num_classes: int) -> np.ndarray:
     model.eval()
     device = next(model.parameters()).device
     clean_b = clean.unsqueeze(0).to(device)
@@ -300,15 +278,7 @@ def sweep_mlp_layers(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tenso
     return patch_probs
 
 
-def sweep_attention_head_positions(
-    model: nn.Module,
-    clean: torch.Tensor,
-    corrupt: torch.Tensor,
-    num_layers: int,
-    num_heads: int,
-    seq_len: int,
-    num_classes: int
-) -> np.ndarray:
+def sweep_attention_head_positions(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, num_layers: int, num_heads: int, seq_len: int, num_classes: int) -> np.ndarray:
     model.eval()
     device = next(model.parameters()).device
     clean_b = clean.unsqueeze(0).to(device)
@@ -326,14 +296,7 @@ def sweep_attention_head_positions(
     return patch_probs  # (layers, heads, positions, classes)
 
 
-def sweep_mlp_positions(
-    model: nn.Module,
-    clean: torch.Tensor,
-    corrupt: torch.Tensor,
-    num_layers: int,
-    seq_len: int,
-    num_classes: int
-) -> np.ndarray:
+def sweep_mlp_positions(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, num_layers: int, seq_len: int, num_classes: int) -> np.ndarray:
     model.eval()
     device = next(model.parameters()).device
     clean_b = clean.unsqueeze(0).to(device)
@@ -350,12 +313,7 @@ def sweep_mlp_positions(
     return patch_probs  # (layers, positions, classes)
 
 
-def find_critical_patches(
-    patch_probs: np.ndarray,
-    baseline_probs: np.ndarray,
-    true_label: int,
-    threshold: float = 0.05
-) -> List[Tuple[int, int, int, float]]:
+def find_critical_patches(patch_probs: np.ndarray, baseline_probs: np.ndarray, true_label: int,threshold: float = 0.05) -> List[Tuple[int, int, int, float]]:
     delta = patch_probs[:, :, :, true_label] - baseline_probs[true_label]
     critical = []
 
@@ -368,7 +326,6 @@ def find_critical_patches(
                     critical.append((l, h, p, delta[l, h, p]))
 
     return critical
-
 
 
 def build_causal_graph(critical_patches: List[Tuple[int, int, int, float]]) -> nx.DiGraph:
@@ -468,18 +425,7 @@ def plot_timeseries_with_attention_overlay(instances: List[torch.Tensor], salien
     plt.show()
 
 
-def plot_head_position_patch_heatmap(
-    patch_probs: np.ndarray,
-    baseline_probs: np.ndarray,
-    true_label: int,
-    layer_idx: int,
-    head_idx: int,
-    title: str = "Attention Head Patch Effect by Position"
-) -> None:
-    """
-    Plots heatmap for a specific head's ΔP(true_label) across positions.
-    patch_probs: (layers, heads, positions, classes)
-    """
+def plot_head_position_patch_heatmap(patch_probs: np.ndarray, baseline_probs: np.ndarray, true_label: int, layer_idx: int, head_idx: int, title: str = "Attention Head Patch Effect by Position" ) -> None:
     delta = patch_probs[layer_idx, head_idx, :, true_label] - baseline_probs[true_label]
     seq_len = delta.shape[0]
 
@@ -495,12 +441,7 @@ def plot_head_position_patch_heatmap(
 
 
 
-def plot_mlp_position_patch_heatmap(
-        patch_probs: np.ndarray,
-        baseline_probs: np.ndarray,
-        true_label: int,
-        title: str = "Patch Effect by Layer and Position"
-) -> None:
+def plot_mlp_position_patch_heatmap(patch_probs: np.ndarray, baseline_probs: np.ndarray, true_label: int, title: str = "Patch Effect by Layer and Position") -> None:
     delta = patch_probs[:, :, true_label] - baseline_probs[true_label]
     L, P = delta.shape
 
@@ -547,11 +488,9 @@ def plot_causal_graph(G: nx.DiGraph, title="Critical Circuits Graph") -> None:
 
 def plot_structured_graph(G):
     pos = {}
-    # Separate node groups
     time_nodes = [n for n in G.nodes if 'Time' in n]
     head_nodes = [n for n in G.nodes if 'H' in n]
 
-    # Assign positions: time nodes in one row, heads in another
     for i, node in enumerate(sorted(time_nodes)):
         pos[node] = (i, 1)
     for i, node in enumerate(sorted(head_nodes)):
@@ -571,19 +510,14 @@ def plot_structured_graph(G):
     plt.tight_layout()
     plt.show()
 
-def patch_multiple_attention_heads_positions(
-    model: nn.Module,
-    clean: torch.Tensor,
-    corrupt: torch.Tensor,
-    critical_edges: List[Tuple[str, str, dict]]
-) -> torch.Tensor:
+
+def patch_multiple_attention_heads_positions(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, critical_edges: List[Tuple[str, str, dict]]) -> torch.Tensor:
     device = next(model.parameters()).device
     clean_b = clean.unsqueeze(0).to(device)
     corrupt_b = corrupt.unsqueeze(0).to(device)
 
     cache = {}
 
-    # Step 1: Capture clean activations
     hook_layers = set()
     for u, v, _ in critical_edges:
         layer = int(v[1])
@@ -603,7 +537,6 @@ def patch_multiple_attention_heads_positions(
     _ = model(clean_b)
     for h in handles_cache: h.remove()
 
-    # Step 2: Patch during corrupted forward
     def patch_hook_factory(layer_idx):
         def patch_fn(m, inp, out):
             out_val = out[0]
@@ -665,7 +598,6 @@ def capture_all_heads(model, x, num_layers, num_heads):
     return cache
 
 
-
 def sweep_head_to_head_influence(model, clean, corrupt) -> np.ndarray:
     model.eval()
     device = next(model.parameters()).device
@@ -714,10 +646,6 @@ def build_head_causal_graph(influence_matrix: np.ndarray, threshold: float = 0.1
 
 
 def sweep_head_to_output_deltas(model, clean, corrupt, true_label, num_classes):
-    """
-    Returns a [L, H] matrix where each entry is the ΔP(true_label)
-    caused by patching that attention head.
-    """
     model.eval()
     device = next(model.parameters()).device
     clean_b = clean.unsqueeze(0).to(device)
