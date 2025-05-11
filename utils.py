@@ -2,7 +2,6 @@ from typing import List, Tuple
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-import itertools
 import torch
 import torch.nn as nn
 import networkx as nx
@@ -486,29 +485,88 @@ def plot_causal_graph(G: nx.DiGraph, title="Critical Circuits Graph") -> None:
 
 
 
-def plot_structured_graph(G):
-    pos = {}
-    time_nodes = [n for n in G.nodes if 'Time' in n]
-    head_nodes = [n for n in G.nodes if 'H' in n]
+def plot_structured_graph_with_heads(G: nx.DiGraph, title="Structured Attribution Graph with Class, Head Layers, and Timesteps") -> None:
+    import matplotlib.pyplot as plt
+    from collections import defaultdict
 
-    for i, node in enumerate(sorted(time_nodes)):
-        pos[node] = (i, 1)
-    for i, node in enumerate(sorted(head_nodes)):
-        pos[node] = (i, 0)
+    # Group nodes
+    time_nodes = sorted([n for n in G.nodes if n.startswith("Time")], key=lambda x: int(x.split()[1]))
+    head_nodes = [n for n in G.nodes if n.startswith("L")]
+    class_nodes = sorted([n for n in G.nodes if n.startswith("Class")], key=lambda x: int(x.split()[1]))
+    special_nodes = [n for n in G.nodes if n not in time_nodes + head_nodes + class_nodes]
 
-    # Size and color nodes by degree or role
-    node_sizes = [500 + 1000 * G.degree(n) for n in G.nodes]
-    node_colors = ['seagreen' if 'Time' in n else 'steelblue' for n in G.nodes]
+    max_x = len(time_nodes) - 1 if time_nodes else 10
 
-    # Draw with directional arrows
-    plt.figure(figsize=(14, 6))
-    nx.draw_networkx(G, pos, with_labels=True, node_color=node_colors,
-                     node_size=node_sizes, edge_color='maroon',
-                     arrows=True, font_size=8, width=1.5)
-    plt.title("Structured Attribution Graph (Time → Head)", fontsize=14)
+    # Group heads by layer
+    heads_by_layer = defaultdict(list)
+    for node in head_nodes:
+        layer = int(node[1])
+        heads_by_layer[layer].append(node)
+    max_layer = max(heads_by_layer.keys()) if heads_by_layer else 0
+
+    pos_raw = {}
+    row_class = 0
+    row_heads_start = 1
+    row_heads_end = row_heads_start + max_layer
+    row_time = row_heads_end + 1
+
+    # Row 0: Class nodes (top)
+    for i, node in enumerate(class_nodes):
+        x = int(i * max_x / max(1, len(class_nodes) - 1))
+        pos_raw[node] = (x, row_class)
+
+    # Rows 1..N: Head layers (top-down L2 → L0)
+    for layer in sorted(heads_by_layer.keys(), reverse=True):
+        heads = heads_by_layer[layer]
+        for i, node in enumerate(sorted(heads, key=lambda x: int(x[3:]))):
+            x = int(i * max_x / max(1, len(heads) - 1))
+            y = row_heads_start + (max_layer - layer)
+            pos_raw[node] = (x, y)
+
+    # Bottom: Time nodes
+    for i, node in enumerate(time_nodes):
+        pos_raw[node] = (i, row_time)
+
+    # Special nodes
+    for node in special_nodes:
+        pos_raw[node] = (-1, row_time + 1)
+
+    # Invert Y-axis to match visual top-down order
+    max_y = max(y for _, y in pos_raw.values())
+    pos = {n: (x, max_y - y) for n, (x, y) in pos_raw.items()}
+
+    # Plotting
+    plt.figure(figsize=(18, 10))
+
+    node_colors = []
+    for n in G.nodes:
+        if n.startswith("Time"):
+            node_colors.append("seagreen")
+        elif n.startswith("L"):
+            node_colors.append("steelblue")
+        elif n.startswith("Class"):
+            node_colors.append("orchid")
+        else:
+            node_colors.append("gray")
+
+    node_sizes = [600 + 200 * G.degree(n) for n in G.nodes]
+    edge_weights = [G[u][v].get('weight', 0.1) for u, v in G.edges]
+    edge_widths = [max(1.0, abs(w) * 8) for w in edge_weights]
+
+    nx.draw(G, pos,
+            with_labels=True,
+            node_color=node_colors,
+            node_size=node_sizes,
+            width=edge_widths,
+            edge_color='maroon',
+            font_size=9,
+            arrows=True)
+
+    plt.title(title, fontsize=16)
     plt.axis('off')
     plt.tight_layout()
     plt.show()
+
 
 
 def patch_multiple_attention_heads_positions(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, critical_edges: List[Tuple[str, str, dict]]) -> torch.Tensor:
@@ -628,21 +686,6 @@ def sweep_head_to_head_influence(model, clean, corrupt) -> np.ndarray:
                             influence[l_src, h_src, l_tgt, h_tgt] = diff
 
     return influence
-
-
-
-def build_head_causal_graph(influence_matrix: np.ndarray, threshold: float = 0.1) -> nx.DiGraph:
-    G = nx.DiGraph()
-    L, H, _, _ = influence_matrix.shape
-    for l1 in range(L):
-        for h1 in range(H):
-            G.add_node(f"L{l1}H{h1}")
-            for l2 in range(L):
-                for h2 in range(H):
-                    score = influence_matrix[l1, h1, l2, h2]
-                    if l1 != l2 and score > threshold:
-                        G.add_edge(f"L{l1}H{h1}", f"L{l2}H{h2}", weight=score)
-    return G
 
 
 def sweep_head_to_output_deltas(model, clean, corrupt, true_label, num_classes):
