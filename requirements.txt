@@ -1,0 +1,7 @@
+aeon==1.1.0
+matplotlib==3.10.3
+networkx==3.4.2
+numpy==2.2.5
+seaborn==0.13.2
+torch==2.6.0
+torch_optimizer==0.3.0
