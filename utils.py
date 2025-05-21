@@ -1,10 +1,14 @@
 from typing import List, Tuple
 import numpy as np
+import matplotlib as mpl
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 import seaborn as sns
 import torch
 import torch.nn as nn
 import networkx as nx
+
+
 
 # HOOK FUNCTIONS
 def _register_hooks(model: nn.Module, substrings: List[str], hook_fn) -> dict:
@@ -154,6 +158,33 @@ def with_head_patch(model, clean, layer_idx, head_idx):
         handle2.remove()
 
 
+def patch_all_heads_in_layer(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, layer: int) -> torch.Tensor:
+    model.eval()
+    device = next(model.parameters()).device
+    clean_b = clean.unsqueeze(0).to(device)
+    corrupt_b = corrupt.unsqueeze(0).to(device)
+
+    cached = {}
+
+    def save_clean_attn_output(module, input, output):
+        cached["attn_output"] = output
+
+    # Register hook on the MultiheadAttention submodule in the given layer
+    hook = model.transformer_encoder.layers[layer].self_attn.register_forward_hook(save_clean_attn_output)
+
+    _ = model(clean_b)
+    hook.remove()
+    def patch_attn_output(module, input, output):
+        return cached["attn_output"]
+
+    hook = model.transformer_encoder.layers[layer].self_attn.register_forward_hook(patch_attn_output)
+    with torch.no_grad():
+        logits = model(corrupt_b)
+    hook.remove()
+
+    return logits
+
+
 
 def patch_mlp_activation(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, layer_idx: int) -> torch.Tensor:
     device = next(model.parameters()).device
@@ -262,6 +293,18 @@ def sweep_heads(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, nu
             patch_probs[l, h] = probs
     return patch_probs
 
+def sweep_layerwise_patch(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, num_classes: int) -> np.ndarray:
+    L = len(model.transformer_encoder.layers)
+    patched_probs = np.zeros((L, num_classes))
+
+    for l in range(L):
+        logits = patch_all_heads_in_layer(model, clean, corrupt, l)
+        probs = torch.softmax(logits, dim=1)[0].detach().cpu().numpy()
+        patched_probs[l] = probs
+
+    return patched_probs
+
+
 
 def sweep_mlp_layers(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, num_classes: int) -> np.ndarray:
     model.eval()
@@ -343,14 +386,41 @@ def build_causal_graph(critical_patches: List[Tuple[int, int, int, float]]) -> n
 def plot_influence(patch_probs: np.ndarray, baseline_probs: np.ndarray, true_label: int) -> None:
     delta = patch_probs[:, :, true_label] - baseline_probs[true_label]
     L, H = delta.shape
-    fig, ax = plt.subplots(figsize=(H * 0.6, L * 0.6))
+    fig, ax = plt.subplots(figsize=(H * 0.9, L * 0.9))
     sns.heatmap(delta, annot=True, fmt="+.2f",
+                annot_kws={"fontsize": 11},
                 xticklabels=[f"H{h}" for h in range(H)],
                 yticklabels=[f"L{l}" for l in range(L)],
-                center=0, cmap="coolwarm", ax=ax)
+                center=0, cmap="Blues", ax=ax,
+                cbar_kws={'label': 'ΔP'})
+
+    rect = patches.Rectangle((0, 0), H, L, linewidth=1, edgecolor='black', facecolor='none', transform=ax.transData, clip_on=False)
+    ax.add_patch(rect)
+
     ax.set_xlabel("Head"); ax.set_ylabel("Layer")
-    ax.set_title("ΔP(true) by Layer & Head")
+    ax.set_title("ΔP(True) by Layer & Head")
     plt.tight_layout(); plt.show()
+
+def plot_layerwise_influence(patched_probs: np.ndarray, baseline_probs: np.ndarray, true_label: int) -> None:
+    palette = sns.color_palette("Blues_r", n_colors=6)[1:]
+
+    delta = patched_probs[:, true_label] - baseline_probs[true_label]
+    L = delta.shape[0]
+
+    fig, ax = plt.subplots(figsize=(6, L * 0.6))
+    sns.barplot(y=np.arange(L), x=delta, hue=np.arange(L), palette=palette[:L], dodge=False, ax=ax, legend=False, orient="h")
+
+    for i, val in enumerate(delta):
+        ax.text(val - 0.02, i, f"{val:.2f}",
+                va='center', ha='right',
+                fontsize=11, color='white' if val > 0.4 else 'black')
+
+    ax.set_ylabel("Layer")
+    ax.set_xlabel("ΔP(True Label)")
+    ax.set_title("ΔP(True) by Layer (All Attention Heads Patched)")
+    plt.tight_layout()
+    plt.show()
+
 
 
 def plot_mlp_influence(patch_probs: np.ndarray, baseline_probs: np.ndarray, true_label: int) -> None:
@@ -391,14 +461,21 @@ def plot_mini_deltas(patch_probs: np.ndarray, baseline_probs: np.ndarray, class_
     plt.tight_layout(); plt.show()
 
 
+
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 def plot_timeseries_with_attention_overlay(instances: List[torch.Tensor], saliencies: List[torch.Tensor], labels: List[str], title: str = "Time Series with Attention Overlay") -> None:
     n = len(instances)
-    fig, axes = plt.subplots(n, 1, figsize=(12, 3 * n), squeeze=False)
+    fig, axes = plt.subplots(n, 1, figsize=(6, 3 * n), squeeze=False)
+
+    blue_rgb = mpl.colors.to_rgb('blue')
+    alpha = 0.4  # same as your shading
+    cmap = mpl.colors.ListedColormap([
+        (*blue_rgb, alpha * v) for v in np.linspace(0, 1, 256)
+    ])
 
     for idx, (instance, saliency) in enumerate(zip(instances, saliencies)):
         instance = instance.detach().cpu().numpy()
         saliency = saliency.detach().cpu().numpy()
-
         saliency = saliency / (saliency.max() + 1e-8)
 
         ax = axes[idx, 0]
@@ -409,19 +486,29 @@ def plot_timeseries_with_attention_overlay(instances: List[torch.Tensor], salien
             ax.plot(time, instance[:, d], label=f"dim {d}", linewidth=1.5)
 
         for t in range(seq_len):
-            alpha = float(saliency[t])
-            ax.axvspan(t - 0.5, t + 0.5, color='orange', alpha=alpha * 0.4)
+            ax.axvspan(t - 0.5, t + 0.5, color=blue_rgb, alpha=saliency[t] * alpha)
 
-        ax.set_title(labels[idx] if labels else f"Instance {idx}")
+        ax.set_title(f"Clean Instance" if idx == 0 else f"Corrupt Instance")
         ax.set_xlabel("Time Step")
         ax.set_ylabel("Value")
         ax.grid(True)
         if input_dim <= 5:
             ax.legend(fontsize=7)
 
+    # Saliency-matching colorbar with alpha
+    norm = mpl.colors.Normalize(vmin=0, vmax=1)
+    sm = mpl.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+
+    # Create a single axes on the right, centered between subplots
+    cbar_ax = fig.add_axes([0.92, 0.3, 0.02, 0.4])  # [left, bottom, width, height]
+    cbar = fig.colorbar(sm, cax=cbar_ax)
+    cbar.set_label("Attention Saliency")
+
     plt.suptitle(title, fontsize=16, y=1.02)
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0, 0.9, 1])
     plt.show()
+
 
 
 def plot_head_position_patch_heatmap(patch_probs: np.ndarray, baseline_probs: np.ndarray, true_label: int, layer_idx: int, head_idx: int, title: str = "Attention Head Patch Effect by Position" ) -> None:
@@ -429,9 +516,14 @@ def plot_head_position_patch_heatmap(patch_probs: np.ndarray, baseline_probs: np
     seq_len = delta.shape[0]
 
     fig, ax = plt.subplots(figsize=(12, 2))
-    sns.heatmap(delta[np.newaxis, :], cmap="coolwarm", center=0,
+    sns.heatmap(delta[np.newaxis, :], cmap="Blues", annot=True, center=0,
+                annot_kws={"rotation": 90, "fontsize": 11, "color": "white"},
                 xticklabels=20, yticklabels=[f"L{layer_idx} H{head_idx}"],
-                cbar_kws={'label': 'ΔP(True Label)'}, ax=ax)
+                cbar_kws={'label': 'ΔP'}, ax=ax)
+
+    rect = patches.Rectangle((0, 0), seq_len, 1, linewidth=1, edgecolor='black', facecolor='none', transform=ax.transData, clip_on=False)
+    ax.add_patch(rect)
+
     ax.set_xlabel("Position (Timestep)")
     ax.set_ylabel("")
     ax.set_title(title)
