@@ -82,7 +82,7 @@ def patch_activations(model: nn.Module, x: torch.Tensor, cache: dict, targets: L
 def get_probs(model: nn.Module, instance: torch.Tensor) -> np.ndarray:
     device = next(model.parameters()).device
     with torch.no_grad():
-        logits = model(instance.unsqueeze(0).to(device))
+        logits = model(instance.to(device))
         probs = torch.softmax(logits, dim=1)[0].cpu().numpy()
     return probs
 
