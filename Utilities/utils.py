@@ -98,8 +98,8 @@ def get_encoder_inputs(model: nn.Module, x: torch.Tensor) -> torch.Tensor:
 def patch_attention_head(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor,
                          layer_idx: int, head_idx: int) -> torch.Tensor:
     device = next(model.parameters()).device
-    clean_b = clean.unsqueeze(0).to(device)
-    corrupt_b = corrupt.unsqueeze(0).to(device)
+    clean_b = clean.to(device)
+    corrupt_b = corrupt.to(device)
     layer_mod = model.transformer_encoder.layers[layer_idx]
     attn_mod = layer_mod.self_attn
     cache = {}
@@ -126,7 +126,7 @@ from contextlib import contextmanager
 @contextmanager
 def with_head_patch(model, clean, layer_idx, head_idx):
     device = next(model.parameters()).device
-    clean_b = clean.unsqueeze(0).to(device)
+    clean_b = clean.to(device)
 
     layer_mod = model.transformer_encoder.layers[layer_idx]
     attn_mod = layer_mod.self_attn
@@ -161,8 +161,8 @@ def with_head_patch(model, clean, layer_idx, head_idx):
 def patch_all_heads_in_layer(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, layer: int) -> torch.Tensor:
     model.eval()
     device = next(model.parameters()).device
-    clean_b = clean.unsqueeze(0).to(device)
-    corrupt_b = corrupt.unsqueeze(0).to(device)
+    clean_b = clean.to(device)
+    corrupt_b = corrupt.to(device)
 
     cached = {}
 
@@ -188,8 +188,8 @@ def patch_all_heads_in_layer(model: nn.Module, clean: torch.Tensor, corrupt: tor
 
 def patch_mlp_activation(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, layer_idx: int) -> torch.Tensor:
     device = next(model.parameters()).device
-    clean_b = clean.unsqueeze(0).to(device)
-    corrupt_b = corrupt.unsqueeze(0).to(device)
+    clean_b = clean.to(device)
+    corrupt_b = corrupt.to(device)
     layer_mod = model.transformer_encoder.layers[layer_idx]
     mlp_layer = layer_mod.linear2
 
@@ -213,8 +213,8 @@ def patch_mlp_activation(model: nn.Module, clean: torch.Tensor, corrupt: torch.T
 
 def patch_attention_head_at_position(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, layer_idx: int, head_idx: int, pos_idx: int) -> torch.Tensor:
     device = next(model.parameters()).device
-    clean_b = clean.unsqueeze(0).to(device)
-    corrupt_b = corrupt.unsqueeze(0).to(device)
+    clean_b = clean.to(device)
+    corrupt_b = corrupt.to(device)
 
     layer_mod = model.transformer_encoder.layers[layer_idx]
     attn_mod = layer_mod.self_attn
@@ -249,8 +249,8 @@ def patch_attention_head_at_position(model: nn.Module, clean: torch.Tensor, corr
 
 def patch_mlp_at_position(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, layer_idx: int, pos_idx: int) -> torch.Tensor:
     device = next(model.parameters()).device
-    clean_b = clean.unsqueeze(0).to(device)
-    corrupt_b = corrupt.unsqueeze(0).to(device)
+    clean_b = clean.to(device)
+    corrupt_b = corrupt.to(device)
 
     layer_mod = model.transformer_encoder.layers[layer_idx]
     mlp_layer = layer_mod.linear2
@@ -281,8 +281,8 @@ def patch_mlp_at_position(model: nn.Module, clean: torch.Tensor, corrupt: torch.
 def sweep_heads(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, num_classes: int) -> np.ndarray:
     model.eval()
     device = next(model.parameters()).device
-    clean_b = clean.unsqueeze(0).to(device)
-    corrupt_b = corrupt.unsqueeze(0).to(device)
+    clean_b = clean.to(device)
+    corrupt_b = corrupt.to(device)
     L = len(model.transformer_encoder.layers)
     H = model.transformer_encoder.layers[0].self_attn.num_heads
     patch_probs = np.zeros((L, H, num_classes))
@@ -309,8 +309,8 @@ def sweep_layerwise_patch(model: nn.Module, clean: torch.Tensor, corrupt: torch.
 def sweep_mlp_layers(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, num_classes: int) -> np.ndarray:
     model.eval()
     device = next(model.parameters()).device
-    clean_b = clean.unsqueeze(0).to(device)
-    corrupt_b = corrupt.unsqueeze(0).to(device)
+    clean_b = clean.to(device)
+    corrupt_b = corrupt.to(device)
     L = len(model.transformer_encoder.layers)
     patch_probs = np.zeros((L, num_classes))
     for l in range(L):
@@ -323,8 +323,8 @@ def sweep_mlp_layers(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tenso
 def sweep_attention_head_positions(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, num_layers: int, num_heads: int, seq_len: int, num_classes: int) -> np.ndarray:
     model.eval()
     device = next(model.parameters()).device
-    clean_b = clean.unsqueeze(0).to(device)
-    corrupt_b = corrupt.unsqueeze(0).to(device)
+    clean_b = clean.to(device)
+    corrupt_b = corrupt.to(device)
 
     patch_probs = np.zeros((num_layers, num_heads, seq_len, num_classes))
 
@@ -341,8 +341,8 @@ def sweep_attention_head_positions(model: nn.Module, clean: torch.Tensor, corrup
 def sweep_mlp_positions(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, num_layers: int, seq_len: int, num_classes: int) -> np.ndarray:
     model.eval()
     device = next(model.parameters()).device
-    clean_b = clean.unsqueeze(0).to(device)
-    corrupt_b = corrupt.unsqueeze(0).to(device)
+    clean_b = clean.to(device)
+    corrupt_b = corrupt.to(device)
 
     patch_probs = np.zeros((num_layers, seq_len, num_classes))
 
@@ -364,7 +364,8 @@ def find_critical_patches(patch_probs: np.ndarray, baseline_probs: np.ndarray, t
     for l in range(L):
         for h in range(H):
             for p in range(P):
-                if delta[l, h, p] > threshold:
+                d = delta[l, h, p]
+                if abs(d) > threshold:
                     critical.append((l, h, p, delta[l, h, p]))
 
     return critical
@@ -399,7 +400,8 @@ def plot_influence(patch_probs: np.ndarray, baseline_probs: np.ndarray, true_lab
 
     ax.set_xlabel("Head"); ax.set_ylabel("Layer")
     ax.set_title("ΔP(True) by Layer & Head")
-    plt.tight_layout(); plt.show()
+    plt.tight_layout()
+    plt.show()
 
 def plot_layerwise_influence(patched_probs: np.ndarray, baseline_probs: np.ndarray, true_label: int) -> None:
     palette = sns.color_palette("Blues_r", n_colors=6)[1:]
@@ -424,12 +426,20 @@ def plot_layerwise_influence(patched_probs: np.ndarray, baseline_probs: np.ndarr
 
 
 def plot_mlp_influence(patch_probs: np.ndarray, baseline_probs: np.ndarray, true_label: int) -> None:
+    palette = sns.color_palette("Blues_r", n_colors=6)[1:]
     delta = patch_probs[:, true_label] - baseline_probs[true_label]
     L = delta.shape[0]
-    fig, ax = plt.subplots(figsize=(L * 0.6, 4))
-    sns.barplot(x=np.arange(L), y=delta, hue=np.arange(L), palette="coolwarm", dodge=False, ax=ax, legend=False)
-    ax.set_xlabel("Layer")
-    ax.set_ylabel("ΔP(True Label)")
+
+    fig, ax = plt.subplots(figsize=(6, min(L * 0.6, 10)))
+    sns.barplot(x=delta, y=np.arange(L), hue=np.arange(L), palette=palette[:L], dodge=False, ax=ax, legend=False, orient="h")
+
+    for i, val in enumerate(delta):
+        ax.text(val - 0.02, i, f"{val:.2f}",
+                va='center', ha='right',
+                fontsize=11, color='white' if val > 0.4 else 'black')
+
+    ax.set_ylabel("Layer")
+    ax.set_xlabel("ΔP(True Label)")
     ax.set_title("ΔP(True) by MLP Layer")
     plt.tight_layout()
     plt.show()
@@ -532,14 +542,23 @@ def plot_head_position_patch_heatmap(patch_probs: np.ndarray, baseline_probs: np
 
 
 
-def plot_mlp_position_patch_heatmap(patch_probs: np.ndarray, baseline_probs: np.ndarray, true_label: int, title: str = "Patch Effect by Layer and Position") -> None:
+def plot_mlp_position_patch_heatmap(patch_probs: np.ndarray, baseline_probs: np.ndarray, true_label: int, title: str = "ΔP(True) by Layer & Position") -> None:
+    import matplotlib.patches as patches
+
     delta = patch_probs[:, :, true_label] - baseline_probs[true_label]
     L, P = delta.shape
 
-    fig, ax = plt.subplots(figsize=(12, 0.5 * L))
-    sns.heatmap(delta, cmap="coolwarm", center=0,
-                xticklabels=20, yticklabels=[f"Layer {i}" for i in range(L)],
-                cbar_kws={'label': 'ΔP(True Label)'}, ax=ax)
+    fig, ax = plt.subplots(figsize=(P * 0.4, L * 0.6))
+    sns.heatmap(delta, annot=True, fmt="+.2f",
+                annot_kws={"fontsize": 6},
+                xticklabels=[f"T{p}" for p in range(P)],
+                yticklabels=[f"L{l}" for l in range(L)],
+                center=0, cmap="Blues", ax=ax,
+                cbar_kws={'label': 'ΔP(True Label)'})
+
+    rect = patches.Rectangle((0, 0), P, L, linewidth=1, edgecolor='black', facecolor='none', transform=ax.transData, clip_on=False)
+    ax.add_patch(rect)
+
     ax.set_xlabel("Position (Timestep)")
     ax.set_ylabel("Layer")
     ax.set_title(title)
@@ -663,8 +682,8 @@ def plot_structured_graph_with_heads(G: nx.DiGraph, title="Structured Attributio
 
 def patch_multiple_attention_heads_positions(model: nn.Module, clean: torch.Tensor, corrupt: torch.Tensor, critical_edges: List[Tuple[str, str, dict]]) -> torch.Tensor:
     device = next(model.parameters()).device
-    clean_b = clean.unsqueeze(0).to(device)
-    corrupt_b = corrupt.unsqueeze(0).to(device)
+    clean_b = clean.to(device)
+    corrupt_b = corrupt.to(device)
 
     cache = {}
 
@@ -740,7 +759,7 @@ def capture_all_heads(model, x, num_layers, num_heads):
         for h in range(num_heads):
             handles.append(mod.register_forward_hook(make_hook(l, h)))
 
-    _ = model(x.unsqueeze(0).to(next(model.parameters()).device))
+    _ = model(x.to(next(model.parameters()).device))
 
     for h in handles:
         h.remove()
@@ -751,8 +770,8 @@ def capture_all_heads(model, x, num_layers, num_heads):
 def sweep_head_to_head_influence(model, clean, corrupt) -> np.ndarray:
     model.eval()
     device = next(model.parameters()).device
-    clean_b = clean.unsqueeze(0).to(device)
-    corrupt_b = corrupt.unsqueeze(0).to(device)
+    clean_b = clean.to(device)
+    corrupt_b = corrupt.to(device)
 
     L = len(model.transformer_encoder.layers)
     H = model.transformer_encoder.layers[0].self_attn.num_heads
@@ -783,8 +802,8 @@ def sweep_head_to_head_influence(model, clean, corrupt) -> np.ndarray:
 def sweep_head_to_output_deltas(model, clean, corrupt, true_label, num_classes):
     model.eval()
     device = next(model.parameters()).device
-    clean_b = clean.unsqueeze(0).to(device)
-    corrupt_b = corrupt.unsqueeze(0).to(device)
+    clean_b = clean.to(device)
+    corrupt_b = corrupt.to(device)
 
     # Get baseline probabilities from corrupted input
     with torch.no_grad():
