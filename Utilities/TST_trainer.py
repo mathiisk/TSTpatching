@@ -161,8 +161,8 @@ class Trainer:
 
 def main():
     # hyperparameters
-    dataset_name = "JapaneseVowels" # simply specify name from https://www.timeseriesclassification.com/dataset.php
-    batch_size = 4
+    dataset_name = "LSST" # simply specify name from https://www.timeseriesclassification.com/dataset.php
+    batch_size = 32
     num_epochs = 100
     model_path = f"TST_{dataset_name.lower()}.pth"
 

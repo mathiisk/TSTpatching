@@ -1,0 +1,2 @@
+src_idx,tgt_idx,true_label,baseline_P,P_after_multi5,delta_multi5
+5,20,1,0.3658146560192108,0.8216883540153503,0.4558736979961395
