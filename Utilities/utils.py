@@ -388,7 +388,7 @@ def build_causal_graph(critical_patches: List[Tuple[int, int, int, float]]) -> n
     G = nx.DiGraph()
 
     for layer, head, pos, delta in critical_patches:
-        timestep_node = f"Time {pos}"
+        timestep_node = f"T {pos}"
         head_node = f"L{layer}H{head}"
 
         G.add_edge(timestep_node, head_node, weight=delta)
