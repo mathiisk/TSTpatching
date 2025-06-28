@@ -9,6 +9,19 @@ import torch.nn as nn
 import networkx as nx
 
 
+class FigureHolder:
+    def __init__(self):
+        self.fig = None
+
+    def update(self, fig):
+        self.fig = fig
+
+    def save(self, path=None):
+        if self.fig:
+            self.fig.savefig(path, format="pdf", bbox_inches="tight")
+            return f"Saved to {path}"
+        return "No figure to save"
+
 
 # HOOK FUNCTIONS
 def _register_hooks(model: nn.Module, substrings: List[str], hook_fn) -> dict:
@@ -595,12 +608,14 @@ def plot_causal_graph(G: nx.DiGraph, title="Critical Circuits Graph") -> None:
     plt.show()
 
 
-
-def plot_structured_graph_with_heads(G: nx.DiGraph, title="Structured Attribution Graph with Class, Head Layers, and Timesteps") -> None:
-    import matplotlib.pyplot as plt
+def plot_structured_graph_with_heads(
+    G: nx.DiGraph,
+    title=None,
+    node_labels: dict = None
+) -> None:
     from collections import defaultdict
 
-    # Group nodes
+    # Group nodes (use internal names for layout)
     time_nodes = sorted([n for n in G.nodes if n.startswith("Time")], key=lambda x: int(x.split()[1]))
     head_nodes = [n for n in G.nodes if n.startswith("L")]
     class_nodes = sorted([n for n in G.nodes if n.startswith("Class")], key=lambda x: int(x.split()[1]))
@@ -621,12 +636,12 @@ def plot_structured_graph_with_heads(G: nx.DiGraph, title="Structured Attributio
     row_heads_end = row_heads_start + max_layer
     row_time = row_heads_end + 1
 
-    # Row 0: Class nodes (top)
+    # Class nodes
     for i, node in enumerate(class_nodes):
         x = int(i * max_x / max(1, len(class_nodes) - 1))
         pos_raw[node] = (x, row_class)
 
-    # Rows 1..N: Head layers (top-down L2 → L0)
+    # Head layers (L2 → L0 from top to bottom)
     for layer in sorted(heads_by_layer.keys(), reverse=True):
         heads = heads_by_layer[layer]
         for i, node in enumerate(sorted(heads, key=lambda x: int(x[3:]))):
@@ -634,7 +649,7 @@ def plot_structured_graph_with_heads(G: nx.DiGraph, title="Structured Attributio
             y = row_heads_start + (max_layer - layer)
             pos_raw[node] = (x, y)
 
-    # Bottom: Time nodes
+    # Time nodes
     for i, node in enumerate(time_nodes):
         pos_raw[node] = (i, row_time)
 
@@ -642,13 +657,11 @@ def plot_structured_graph_with_heads(G: nx.DiGraph, title="Structured Attributio
     for node in special_nodes:
         pos_raw[node] = (-1, row_time + 1)
 
-    # Invert Y-axis to match visual top-down order
+    # Flip Y-axis for top-down layout
     max_y = max(y for _, y in pos_raw.values())
     pos = {n: (x, max_y - y) for n, (x, y) in pos_raw.items()}
 
-    # Plotting
-    plt.figure(figsize=(18, 10))
-
+    # Node colors
     node_colors = []
     for n in G.nodes:
         if n.startswith("Time"):
@@ -656,27 +669,38 @@ def plot_structured_graph_with_heads(G: nx.DiGraph, title="Structured Attributio
         elif n.startswith("L"):
             node_colors.append("steelblue")
         elif n.startswith("Class"):
-            node_colors.append("orchid")
+            node_colors.append("orange")
         else:
             node_colors.append("gray")
 
-    node_sizes = [600 + 200 * G.degree(n) for n in G.nodes]
+    node_sizes = [800 + 200 * G.degree(n) for n in G.nodes]
     edge_weights = [G[u][v].get('weight', 0.1) for u, v in G.edges]
     edge_widths = [max(1.0, abs(w) * 8) for w in edge_weights]
 
-    nx.draw(G, pos,
-            with_labels=True,
-            node_color=node_colors,
-            node_size=node_sizes,
-            width=edge_widths,
-            edge_color='maroon',
-            font_size=9,
-            arrows=True)
+    fig = plt.figure(figsize=(18, 10))
+    nx.draw(
+        G,
+        pos,
+        with_labels=True,
+        labels=node_labels if node_labels else None,
+        node_color=node_colors,
+        node_size=node_sizes,
+        width=edge_widths,
+        edge_color='maroon',
+        edgecolors='black',
+        linewidths=1.2,
+        font_size=11,
+        font_color='white',
+        font_weight='bold',
+        arrows=True
+    )
 
     plt.title(title, fontsize=16)
     plt.axis('off')
     plt.tight_layout()
     plt.show()
+    return fig
+
 
 
 
