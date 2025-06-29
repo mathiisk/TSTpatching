@@ -1,59 +1,69 @@
-# MECHANISTIC INTERPRETABILITY ON TRANSFORMER-BASED TIME SERIES CLASSIFICATION MODEL
-### Author: Matiss Kalnare
-### Supervisor Niki van Stein
+# Transformer Time Series Interpretability Toolkit
 
-This repository contains a PyTorch-based toolkit created as part of a BSc thesis, focused on **interpretability**  techique adaptions to Transformer-based Time Series (TST) classification model. 
-It provides two pipelines to probe and interpret the inner workings of a model.
+This repository provides an end-to-end workflow for analysing Transformer-based time series classification (TSC) models through **mechanistic interpretability** methods. It contains ready-to-run notebooks, a modular training script and a collection of pre-trained models.
 
-**1. Activation Patching / Causal Tracing**: causal intervention on specific parts (Heads, MLP layers, etc.) to form / confirm hypothesis about influential components wihtin the Transformer
+*Author: Matiss Kalnare*
+*Supervisor: Niki van Stein*
 
-**2. Sparse Autoencoders**: a neural network trained on the activation values of a specific layer within the Transformer that highlights possible interpretable features / concepts that the Transformer has learned
+## Repository Structure
 
-Included is a modular training script for a TST, some pretrained models on benchmark datasets, and Interactive Jupyter notebooks to follow work through the two mechanistic interpretability methods.
-
-# Components
-- **TSTtrainer.py** Core training and evaluation script for Transformer-based TSC models. Defines convolutional patch embeddings, learnable postional encodings, and a Transformer encoder with a classification head
-
-- **TSTpatching.ipynb** Pipeline for causal tracing. Loads a pre-trained model, performs selective patching across various components, and measures downstream influence on predicitons. Forms causal / attribution graphs
-
-- **SAE.ipynb** Pipeline for training and analyzing sparse autoencoders. Visualiuzes learned features / concepts. 
-
-- **Pre-trained models** Ready to use weights for Yoga (univariate), JapaneseVowels (multivariate) datasets to experiment on
-
-# Installation
 ```
-# Clone
-git clone https://github.com/mathiisk/TSTpatching.git
-cd TSTpatching
+Notebooks/             - Interactive notebooks demonstrating the two analysis pipelines
+  Patching.ipynb       - Activation patching/causal tracing walkthrough
+  SAE.ipynb            - Sparse Autoencoder exploration
+  IPYNB_to_PY/         - Python script versions of the notebooks
 
-# Install packages
-pip install -r requirements.txt
+Utilities/             - Helper code
+  TST_trainer.py       - Training/evaluation script and model definition
+  utils.py             - Patching and plotting utilities
+
+TST_models/            - Pre-trained models for several datasets
+SAE_models/            - Example sparse autoencoder weights
+Results/               - Example results (plots, patched predictions, ...)
+requirements.txt       - Python package requirements
 ```
-CUDA-enabled GPU recommended but not necessary
 
-# Usage
-1. Training a new model
+## Installation
+1. Clone the repository and install dependencies
+   ```bash
+   git clone https://github.com/mathiisk/TSTpatching.git
+   cd TSTpatching
+   pip install -r requirements.txt
+   ```
+   A GPU with CUDA is recommended but the code also runs on CPU.
+
+## Quick Start
+Pre-trained weights for common datasets are provided in `TST_models`. You can immediately run the notebooks to reproduce the experiments.
+
+Open the activation patching notebook:
+```bash
+jupyter notebook Notebooks/Patching.ipynb
 ```
-python TSTtrainer.py --dataset DATASETNAME --epochs NUMEPOCHS --batch_size BATCHSIZE
+or the sparse autoencoder notebook:
+```bash
+jupyter notebook Notebooks/SAE.ipynb
 ```
-Specify Dataset name from https://www.timeseriesclassification.com/dataset.php, e.g, JapaneseVowels
+Step through the cells to load a model, run the analysis and display plots. The notebooks assume the working directory is the repository root.
 
-Specify number of epochs for trianing, e.g., 100
+## Training a New Model
+`Utilities/TST_trainer.py` can train a fresh Transformer on any dataset from [timeseriesclassification.com](https://www.timeseriesclassification.com/dataset.php).
 
-Specify batch size, e.g., 4
-
-The trained weights will be saved as TST_<dataset>.pth in the project root
-
-2. Run Activation Patching Experiments
+```bash
+python Utilities/TST_trainer.py --dataset DATASET_NAME --epochs NUM_EPOCHS --batch_size BATCH_SIZE
 ```
-jupyter notebook TSTpatching.ipynb
-```
-Follow the cells to load a pre-trained model, apply patching, and analyze the results
 
-3. Run Sparse Autoencoder Experiments
-Follow the cells to train a sparse autoencoder, visualize sparse codes
+- `DATASET_NAME` should match one of the names on the website, e.g. `JapaneseVowels`.
+- `NUM_EPOCHS` defaults to `100` if not provided.
+- `BATCH_SIZE` defaults to `32`.
+
+The resulting weights are stored as `TST_<dataset>.pth` under `TST_models/`.
 
 
-# BSc Thesis Context
-This repository aims to support a BSc thesis investigating whether **mechanistic interpretability** methods from NLP (activation patching, sparse autoencoders) can be adapted to Transformer-based time series classifiers. 
-The primary goal is to determine the feasibility and insight potential of these methods in revealing internal causal components within TST models
+## Sparse Autoencoders
+The notebook `Notebooks/SAE.ipynb` trains an autoencoder on intermediate activations of a Transformer. It highlights interpretable concepts that the model relies on. Pre-trained SAE weights are stored in `SAE_models/` and can be loaded by the notebook.
+
+## Output & Results
+All figures and intermediate outputs generated by the notebooks are stored under `Results/` by default. Separate folders exist for each dataset so you can keep experiments organised.
+
+## BSc Thesis Context
+This code base accompanies a Bachelor thesis exploring whether interpretability techniques from NLP, namely activation patching and sparse autoencoders, can reveal causal mechanisms inside Transformer-based time series classifiers. The provided scripts and notebooks allow anyone to reproduce and extend the experiments.
